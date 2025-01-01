@@ -1,0 +1,4 @@
+matplotlib>=3.10.0
+pandas>=2.2.3
+torch>=2.5.1
+torchsummary>=1.5.1
