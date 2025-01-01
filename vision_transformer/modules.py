@@ -1,5 +1,7 @@
 """vision transformer module"""
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import Tensor, nn
@@ -15,13 +17,26 @@ class PatchEmbedding(nn.Module):
         )
 
     def forward(self, x: Tensor) -> Tensor:
-        # patch embedding via 2D convolution
-        # (B, C, H, W) -> (B, D, P, P)
         x = self.embedding(x)
-
-        # flatten patches
-        # (B, D, P, P) -> (B, D, P*P) -> (B, P*P, D)
         x = x.flatten(2).transpose(1, 2)
+        return x
+
+
+class MLP(nn.Module):
+    """MLP module"""
+
+    def __init__(self, in_dim: int, hidden_dim: int, dropout: float):
+        super().__init__()
+        self.up_proj = nn.Linear(in_dim, hidden_dim)
+        self.down_proj = nn.Linear(hidden_dim, in_dim)
+        self.dropout = dropout
+
+    def forward(self, x: Tensor) -> Tensor:
+        x = self.up_proj(x)
+        x = F.gelu(x)
+        x = F.dropout(x, self.dropout, self.training)
+        x = self.down_proj(x)
+        x = F.dropout(x, self.dropout, self.training)
         return x
 
 
@@ -36,56 +51,25 @@ class MSA(nn.Module):
 
         self.in_proj = nn.Linear(embed_dim, embed_dim * 3)
         self.out_proj = nn.Linear(embed_dim, embed_dim)
-        self.attn = None
 
     def forward(self, x: Tensor) -> Tensor:
         B, N, D = x.shape
 
-        # input projection as batched matrix multiply for Q, K and V in parallel
-        # (B, N, D) -> (B, N, 3*D)
         qkv = self.in_proj(x)
-
-        # split Q, K and V
-        # (B, N, 3*D) -> (B, N, D)
         q, k, v = qkv.split(D, dim=2)
-
-        # split Q, K and V into seperate heads
-        # (B, N, D) -> (B, N, H, D') -> (B, H, N, D')
         q = q.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
         v = v.view(B, N, self.num_heads, self.head_dim).transpose(1, 2)
 
-        # scaled dot product attention
-        # (B, H, N, D') -> (B, H, N, D')
-        y = F.scaled_dot_product_attention(q, k, v)
+        attn_w = q @ k.transpose(2, 3) / math.sqrt(self.head_dim)
+        attn_w = F.softmax(attn_w, dim=-1)
+        attn_w = F.dropout(attn_w, self.dropout, self.training)
+        y = attn_w @ v
 
-        # merge heads
-        # (B, H, N, D') -> (B, N, H, D') -> (B, N, D)
         y = y.transpose(1, 2).contiguous().flatten(2)
-
-        # output projection
-        # (B, N, D) -> (B, N, D)
         y = self.out_proj(y)
         y = F.dropout(y, self.dropout, self.training)
         return y
-
-
-class MLP(nn.Module):
-    """MLP module"""
-
-    def __init__(self, in_dim: int, hidden_dim: int, dropout: float):
-        super().__init__()
-        self.up_proj = nn.Linear(in_dim, hidden_dim)
-        self.down_proj = nn.Linear(hidden_dim, in_dim)
-        self.dropout = dropout
-
-    def forward(self, x: Tensor) -> Tensor:
-        x = self.up_proj(x)
-        x = F.dropout(x, self.dropout, self.training)
-        x = F.gelu(x)
-        x = self.down_proj(x)
-        x = F.dropout(x, self.dropout, self.training)
-        return x
 
 
 class TransformerBlock(nn.Module):
@@ -94,12 +78,12 @@ class TransformerBlock(nn.Module):
     def __init__(self, embed_dim: int, num_heads: int, dropout: float):
         super().__init__()
         self.ln1 = nn.LayerNorm(embed_dim)
-        self.attn = MSA(embed_dim, num_heads, dropout)
+        self.msa = MSA(embed_dim, num_heads, dropout)
         self.ln2 = nn.LayerNorm(embed_dim)
         self.mlp = MLP(embed_dim, 4 * embed_dim, dropout)
 
     def forward(self, x: Tensor) -> Tensor:
-        x = x + self.attn(self.ln1(x))
+        x = x + self.msa(self.ln1(x))
         x = x + self.mlp(self.ln2(x))
         return x
 
@@ -124,8 +108,10 @@ class VisionTransformer(nn.Module):
         self.dropout = dropout
 
         self.patch_embed = PatchEmbedding(in_channels, patch_size, embed_dim)
-        self.pos_embed = nn.Embedding(num_patches + 1, embed_dim)
-        self.class_embed = nn.Parameter(torch.randn(1, 1, embed_dim))
+        self.pos_embed = nn.Parameter(
+            torch.empty(1, num_patches + 1, embed_dim).normal_(std=0.02)
+        )
+        self.class_embed = nn.Parameter(torch.zeros(1, 1, embed_dim))
         self.blocks = nn.ModuleList(
             [TransformerBlock(embed_dim, num_heads, dropout) for _ in range(num_layers)]
         )
@@ -135,8 +121,7 @@ class VisionTransformer(nn.Module):
     def forward(self, x: Tensor) -> Tensor:
         patch_embed = self.patch_embed(x)
         class_embed = self.class_embed.expand(x.shape[0], 1, self.embed_dim)
-        pos_embed = self.pos_embed(torch.arange(self.num_patches + 1, device=x.device))
-        x = torch.concat([class_embed, patch_embed], dim=1) + pos_embed
+        x = torch.concat([class_embed, patch_embed], dim=1) + self.pos_embed
         x = F.dropout(x, self.dropout)
 
         for block in self.blocks:
