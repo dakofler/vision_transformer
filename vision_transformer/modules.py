@@ -100,7 +100,7 @@ class VisionTransformer(nn.Module):
         num_heads: int,
         num_layers: int,
         num_classes: int,
-        dropout: float = 0.0,
+        dropout: float,
     ):
         super().__init__()
         self.num_patches = num_patches
