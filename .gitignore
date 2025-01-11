@@ -1,6 +1,6 @@
 data/*
 plot_data/*
-test.ipynb
+runs/*
 *.pt
 create_plots.ipynb
 dev.ipynb
