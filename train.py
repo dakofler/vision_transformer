@@ -11,23 +11,24 @@ from vision_transformer import VisionTransformer
 
 torch.manual_seed(42)
 
+
+# hyperparameters
 PATCH_SIZE = 4
 EMBED_DIM = 384
 NUM_HEADS = 6
 NUM_LAYERS = 6
 NUM_CLASSES = 10
 DROPOUT = 0.25
-
 BATCH_SIZE = 256
 EPOCHS = 15
-CKPT_INTEVAL = 25
+CKPT_INTEVAL = 5
 LR = 3e-4
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 NUM_PATCHES = (32 // PATCH_SIZE) ** 2
 
 
-# load and preprocessdata
+# load data
 def unpickle(file: str) -> dict:
     """Unpickles files"""
     with open(file, "rb") as fo:
@@ -35,19 +36,11 @@ def unpickle(file: str) -> dict:
     return d
 
 
-train_batches = [
-    "data/data_batch_1",
-    "data/data_batch_2",
-    "data/data_batch_3",
-    "data/data_batch_4",
-    "data/data_batch_5",
-]
-X_train = torch.concat(
-    [torch.tensor(unpickle(p)[b"data"]) for p in train_batches], dim=0
-).view(-1, 3, 32, 32)
-y_train = torch.concat(
-    [torch.tensor(unpickle(p)[b"labels"]) for p in train_batches], dim=0
-)
+train_batches = [f"data/data_batch_{i}" for i in range(1, 6)]
+train_data = [torch.tensor(unpickle(p)[b"data"]) for p in train_batches]
+train_labels = [torch.tensor(unpickle(p)[b"labels"]) for p in train_batches]
+X_train = torch.concat(train_data).view(-1, 3, 32, 32)
+y_train = torch.concat(train_labels)
 X_test = torch.tensor(unpickle("data/test_batch")[b"data"]).view(-1, 3, 32, 32)
 y_test = torch.tensor(unpickle("data/test_batch")[b"labels"])
 
@@ -64,6 +57,7 @@ labels = {
     9: "truck",
 }
 
+# shuffle and split data
 rand_idx = torch.randperm(len(X_train))
 X_train_shuffled, y_train_shuffled = X_train[rand_idx], y_train[rand_idx]
 n = int(0.8 * len(X_train))
@@ -95,26 +89,30 @@ scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
 )
 
 
-def accuracy(logits: torch.Tensor, target: torch.Tensor) -> float:
+def accuracy(logits: torch.Tensor, targets: torch.Tensor) -> float:
     """Computes the accuracy score"""
     with torch.no_grad():
-        return (F.softmax(logits, dim=-1).argmax(-1) == target).float().mean().item()
+        return (F.softmax(logits, dim=-1).argmax(-1) == targets).float().mean().item()
 
 
 run_label = f"P{PATCH_SIZE}_D{EMBED_DIM}_H{NUM_HEADS}_L{NUM_LAYERS}_DO{DROPOUT}_E{EPOCHS}_LR{LR}"
 writer = SummaryWriter(log_dir=f"runs/{run_label}")
 
+
+# training loop
 for e in range(1, EPOCHS + 1):
 
     # training
     vit.train()
     for step, batch in enumerate(train_dl):
         print(f"epoch {e}/{EPOCHS} | step {step}/{train_steps}", end="\r")
-        X = batch[0].to(DEVICE) / 255.0
-        y = batch[1].to(DEVICE).long()
+        X = batch[0].to(DEVICE) / 255.0  # scale and cast to float32
+        y = batch[1].to(DEVICE).long()  # cast to int64
 
         logits = vit(X)
         loss = F.cross_entropy(logits, y)
+
+        # log stats
         global_step = (e - 1) * train_steps + step + 1
         writer.add_scalar("train/loss", loss.item(), global_step)
         writer.add_scalar("train/accuracy", accuracy(logits, y), global_step)

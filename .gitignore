@@ -1,6 +1,9 @@
 data/*
+plot_data/*
 test.ipynb
 *.pt
+create_plots.ipynb
+dev.ipynb
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
