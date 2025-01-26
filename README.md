@@ -20,7 +20,7 @@ pip install -r requirements.txt
 ```
 
 ## Usage
-- Download the [CIFAR10-10](https://www.cs.toronto.edu/~kriz/cifar.html)
+- Download the [CIFAR10-10](https://www.cs.toronto.edu/~kriz/cifar.html) dataset
 - Upack and put the files into a `./data` directory
 
 ```bash
